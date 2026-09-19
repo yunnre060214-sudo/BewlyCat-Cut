@@ -21,6 +21,9 @@ const ADJUSTING_CLASS = 'is-bewly-vertical-video-adjusting'
 const ACTIVE_CLASS = 'is-bewly-vertical-video-controls-active'
 const BUTTON_CLASS = 'bewly-vertical-video-zoom-button'
 const RATIO_BUTTON_CLASS = 'bewly-vertical-video-ratio-button'
+const RATIO_MENU_CLASS = 'bewly-vertical-video-ratio-menu'
+const RATIO_OPTION_CLASS = 'bewly-vertical-video-ratio-option'
+const RATIO_MENU_OPEN_CLASS = 'is-bewly-vertical-video-ratio-menu-open'
 const CONTROL_CLASS = 'bewly-vertical-video-zoom-control'
 const MAP_CLASS = 'bewly-vertical-video-zoom-map'
 const CANVAS_CLASS = 'bewly-vertical-video-zoom-canvas'
@@ -30,16 +33,19 @@ const DEFAULT_ZOOM_POSITION_Y = 50
 const MAP_HEIGHT = 160
 const MINIMAP_FRAME_REFRESH_INTERVAL = 30000
 const CONTROLS_AUTO_HIDE_DELAY = 2500
+const CROP_RATIO_STORAGE_KEY = 'bewlyVerticalVideoCropRatio'
 
 const CROP_RATIOS = [
   { label: '1:1', value: 1, css: '1 / 1' },
   { label: '4:3', value: 4 / 3, css: '4 / 3' },
+  { label: '3:2', value: 3 / 2, css: '3 / 2' },
   { label: '16:9', value: 16 / 9, css: '16 / 9' },
 ] as const
 
 let styleEl: HTMLStyleElement | null = null
 let button: HTMLButtonElement | null = null
 let ratioButton: HTMLButtonElement | null = null
+let ratioMenu: HTMLDivElement | null = null
 let control: HTMLDivElement | null = null
 let mapElement: HTMLDivElement | null = null
 let canvasElement: HTMLCanvasElement | null = null
@@ -113,6 +119,45 @@ function injectStyle() {
       right: calc(var(--bew-space-3, 12px) + 64px) !important;
     }
 
+    .${RATIO_MENU_CLASS} {
+      position: absolute !important;
+      top: calc(var(--bewly-vertical-video-controls-top) + 40px) !important;
+      right: var(--bew-space-3, 12px) !important;
+      z-index: 101 !important;
+      display: none;
+      grid-template-columns: repeat(2, minmax(52px, 1fr)) !important;
+      gap: 6px !important;
+      width: 122px !important;
+      padding: 8px !important;
+      border: 0 !important;
+      border-radius: 10px !important;
+      background: rgb(20 20 20 / 82%) !important;
+      backdrop-filter: blur(10px) !important;
+      box-shadow: 0 8px 24px rgb(0 0 0 / 28%) !important;
+    }
+
+    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${RATIO_MENU_OPEN_CLASS} > .${RATIO_MENU_CLASS} {
+      display: grid;
+    }
+
+    .${RATIO_OPTION_CLASS} {
+      height: 30px !important;
+      padding: 0 8px !important;
+      border: 0 !important;
+      border-radius: 7px !important;
+      color: #fff !important;
+      background: rgb(255 255 255 / 10%) !important;
+      font-size: 12px !important;
+      line-height: 30px !important;
+      cursor: pointer !important;
+      outline: 0 !important;
+    }
+
+    .${RATIO_OPTION_CLASS}:hover,
+    .${RATIO_OPTION_CLASS}[aria-checked='true'] {
+      background: var(--bew-theme-color, #00aeec) !important;
+    }
+
     .${CONTROL_CLASS} {
       position: absolute !important;
       top: calc(var(--bewly-vertical-video-controls-top) + 32px + var(--bew-space-6, 24px)) !important;
@@ -133,8 +178,13 @@ function injectStyle() {
     }
 
     .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${ACTIVE_CLASS} > .${CONTROL_CLASS},
-    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${ADJUSTING_CLASS} > .${CONTROL_CLASS} {
+    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${ADJUSTING_CLASS} > .${CONTROL_CLASS},
+    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${RATIO_MENU_OPEN_CLASS} > .${CONTROL_CLASS} {
       display: inline-flex;
+    }
+
+    .${HOST_CLASS}.${RATIO_MENU_OPEN_CLASS} > .${CONTROL_CLASS} {
+      top: calc(var(--bewly-vertical-video-controls-top) + 118px) !important;
     }
 
     .${MAP_CLASS} {
@@ -189,7 +239,8 @@ function injectStyle() {
     }
 
     #bewly-widescreen-root .${HOST_CLASS} > .${BUTTON_CLASS},
-    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_BUTTON_CLASS} {
+    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_BUTTON_CLASS},
+    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_MENU_CLASS} {
       border: 0 !important;
       border-radius: 999px !important;
       box-shadow: 0 6px 18px rgb(0 0 0 / 22%) !important;
@@ -318,13 +369,24 @@ function bindHostActivity(host: HTMLElement) {
   resizeObserver.observe(host)
   window.addEventListener('resize', schedulePositionUpdate)
   document.addEventListener('fullscreenchange', schedulePositionUpdate)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   schedulePositionUpdate()
 
   const onPointerActivity = () => {
     showControlsTemporarily(host)
     schedulePositionUpdate()
   }
-  const onPointerLeave = () => hideControls(host)
+  const onPointerLeave = () => {
+    if (!host.classList.contains(RATIO_MENU_OPEN_CLASS))
+      hideControls(host)
+  }
+  const onDocumentPointerDown = (event: PointerEvent) => {
+    if (!host.classList.contains(RATIO_MENU_OPEN_CLASS))
+      return
+    if (event.composedPath().includes(ratioButton as EventTarget) || event.composedPath().includes(ratioMenu as EventTarget))
+      return
+    setRatioMenuOpen(false)
+  }
   host.addEventListener('pointerenter', onPointerActivity)
   host.addEventListener('pointermove', onPointerActivity)
   host.addEventListener('pointerdown', onPointerActivity)
@@ -334,6 +396,7 @@ function bindHostActivity(host: HTMLElement) {
     resizeObserver.disconnect()
     window.removeEventListener('resize', schedulePositionUpdate)
     document.removeEventListener('fullscreenchange', schedulePositionUpdate)
+    document.removeEventListener('pointerdown', onDocumentPointerDown, true)
     if (positionFrame !== null)
       cancelAnimationFrame(positionFrame)
     host.style.removeProperty('--bewly-vertical-video-toolbar-bottom')
@@ -359,6 +422,58 @@ function getCurrentCropRatio() {
   return CROP_RATIOS[cropRatioIndex] ?? CROP_RATIOS[0]
 }
 
+function setRatioMenuOpen(open: boolean) {
+  if (!currentHost || !ratioButton)
+    return
+
+  currentHost.classList.toggle(RATIO_MENU_OPEN_CLASS, open)
+  ratioButton.setAttribute('aria-expanded', String(open))
+  if (open)
+    showControlsTemporarily(currentHost)
+}
+
+function syncRatioOptions() {
+  if (!ratioMenu)
+    return
+
+  const currentLabel = getCurrentCropRatio().label
+  ratioMenu.querySelectorAll<HTMLButtonElement>(`.${RATIO_OPTION_CLASS}`).forEach((option) => {
+    option.setAttribute('aria-checked', String(option.dataset.ratio === currentLabel))
+  })
+}
+
+function persistCropRatio() {
+  void browser.storage.local.set({
+    [CROP_RATIO_STORAGE_KEY]: getCurrentCropRatio().label,
+  }).catch(() => {})
+}
+
+async function restoreCropRatio() {
+  try {
+    const stored = await browser.storage.local.get(CROP_RATIO_STORAGE_KEY)
+    const label = stored[CROP_RATIO_STORAGE_KEY]
+    const index = CROP_RATIOS.findIndex(ratio => ratio.label === label)
+    if (index >= 0) {
+      cropRatioIndex = index
+      syncCropRatio()
+    }
+  }
+  catch {
+    // Keep the default ratio when extension storage is temporarily unavailable.
+  }
+}
+
+function selectCropRatio(index: number, persist = true) {
+  if (!CROP_RATIOS[index])
+    return
+
+  cropRatioIndex = index
+  syncCropRatio()
+  scheduleMinimapFrameRender(0, true)
+  if (persist)
+    persistCropRatio()
+}
+
 function syncCropRatio() {
   const ratio = getCurrentCropRatio()
   currentHost?.style.setProperty('--bewly-vertical-video-crop-ratio', ratio.css)
@@ -366,16 +481,11 @@ function syncCropRatio() {
   if (ratioButton) {
     ratioButton.textContent = ratio.label
     ratioButton.title = ratio.label
-    ratioButton.setAttribute('aria-label', ratio.label)
+    ratioButton.setAttribute('aria-label', `裁切比例 ${ratio.label}`)
   }
 
+  syncRatioOptions()
   syncZoomPosition()
-}
-
-function cycleCropRatio() {
-  cropRatioIndex = (cropRatioIndex + 1) % CROP_RATIOS.length
-  syncCropRatio()
-  scheduleMinimapFrameRender(0, true)
 }
 
 function syncZoomPosition() {
@@ -429,17 +539,58 @@ function ensureRatioButton(host: HTMLElement) {
     ratioButton = document.createElement('button')
     ratioButton.type = 'button'
     ratioButton.className = RATIO_BUTTON_CLASS
-    ratioButton.addEventListener('click', () => {
+    ratioButton.setAttribute('aria-haspopup', 'menu')
+    ratioButton.setAttribute('aria-expanded', 'false')
+    ratioButton.addEventListener('click', (event) => {
+      event.stopPropagation()
       if (!currentHost?.classList.contains(VERTICAL_CLASS) || !currentHost.classList.contains(ZOOMED_CLASS))
         return
 
-      cycleCropRatio()
-      ratioButton?.blur()
+      setRatioMenuOpen(!currentHost.classList.contains(RATIO_MENU_OPEN_CLASS))
+    })
+    ratioButton.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        setRatioMenuOpen(false)
+        ratioButton?.focus()
+      }
+    })
+  }
+
+  if (!ratioMenu) {
+    ratioMenu = document.createElement('div')
+    ratioMenu.className = RATIO_MENU_CLASS
+    ratioMenu.setAttribute('role', 'menu')
+    ratioMenu.addEventListener('click', event => event.stopPropagation())
+    ratioMenu.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape')
+        return
+
+      event.preventDefault()
+      setRatioMenuOpen(false)
+      ratioButton?.focus()
+    })
+
+    CROP_RATIOS.forEach((ratio, index) => {
+      const option = document.createElement('button')
+      option.type = 'button'
+      option.className = RATIO_OPTION_CLASS
+      option.textContent = ratio.label
+      option.dataset.ratio = ratio.label
+      option.setAttribute('role', 'menuitemradio')
+      option.setAttribute('aria-checked', 'false')
+      option.addEventListener('click', () => {
+        selectCropRatio(index)
+        setRatioMenuOpen(false)
+        ratioButton?.focus()
+      })
+      ratioMenu?.appendChild(option)
     })
   }
 
   if (ratioButton.parentElement !== host)
     host.appendChild(ratioButton)
+  if (ratioMenu.parentElement !== host)
+    host.appendChild(ratioMenu)
 
   syncCropRatio()
 }
@@ -643,7 +794,8 @@ function syncVideoState() {
   const vertical = !!(video?.videoWidth && video.videoHeight && video.videoWidth < video.videoHeight)
   currentHost.classList.toggle(VERTICAL_CLASS, vertical)
   if (!vertical) {
-    currentHost.classList.remove(ZOOMED_CLASS)
+    currentHost.classList.remove(ZOOMED_CLASS, RATIO_MENU_OPEN_CLASS)
+    ratioButton?.setAttribute('aria-expanded', 'false')
     resetZoomPosition()
   }
 
@@ -703,7 +855,7 @@ function refreshVerticalVideoZoom() {
   }
 
   if (currentHost && currentHost !== host) {
-    currentHost.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS)
+    currentHost.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS, RATIO_MENU_OPEN_CLASS)
     currentHost.style.removeProperty('--bewly-vertical-video-zoom-y')
     currentHost.style.removeProperty('--bewly-vertical-video-crop-ratio')
   }
@@ -726,6 +878,7 @@ function refreshVerticalVideoZoom() {
 export function initVerticalVideoZoom() {
   injectStyle()
   refreshAttempts = 0
+  void restoreCropRatio()
   scheduleRefresh(0)
 }
 
@@ -748,9 +901,11 @@ export function resetVerticalVideoZoom() {
   button = null
   ratioButton?.remove()
   ratioButton = null
+  ratioMenu?.remove()
+  ratioMenu = null
   control?.remove()
   control = null
-  currentHost?.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS)
+  currentHost?.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS, RATIO_MENU_OPEN_CLASS)
   currentHost?.style.removeProperty('--bewly-vertical-video-zoom-y')
   currentHost?.style.removeProperty('--bewly-vertical-video-crop-ratio')
   currentHost = null
