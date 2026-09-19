@@ -546,12 +546,8 @@ function syncZoomPosition() {
     const top = Math.max(0, (trackHeight - viewportHeight) * (zoomPositionY / 100))
     mapElement.style.setProperty('--bewly-vertical-video-zoom-window-top', `${top}px`)
     mapElement.setAttribute('aria-valuenow', String(Math.round(zoomPositionY)))
+    mapElement.setAttribute('aria-valuetext', `${Math.round(zoomPositionY)}%`)
   }
-}
-
-function resetZoomPosition() {
-  zoomPositionY = DEFAULT_ZOOM_POSITION_Y
-  syncZoomPosition()
 }
 
 function ensureButton(host: HTMLElement) {
@@ -705,11 +701,25 @@ function ensureControl(host: HTMLElement) {
     })
 
     mapElement.addEventListener('keydown', (event) => {
-      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')
+      const key = event.key
+      if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(key))
         return
 
       event.preventDefault()
-      zoomPositionY = clampZoomPosition(zoomPositionY + (event.key === 'ArrowDown' ? 4 : -4))
+      if (key === 'Home')
+        zoomPositionY = 0
+      else if (key === 'End')
+        zoomPositionY = 100
+      else
+        zoomPositionY = clampZoomPosition(zoomPositionY + (key === 'ArrowDown' ? 4 : key === 'ArrowUp' ? -4 : key === 'PageDown' ? 12 : -12))
+
+      syncZoomPosition()
+      persistCropState()
+    })
+
+    mapElement.addEventListener('dblclick', (event) => {
+      event.preventDefault()
+      zoomPositionY = DEFAULT_ZOOM_POSITION_Y
       syncZoomPosition()
       persistCropState()
     })
@@ -732,7 +742,7 @@ function setZoomPositionFromPointer(event: PointerEvent) {
   const viewportHeight = viewportElement.offsetHeight || getViewportHeight()
   const maxTop = Math.max(1, rect.height - viewportHeight)
   const progress = (event.clientY - rect.top - viewportHeight / 2) / maxTop
-  zoomPositionY = Math.max(0, Math.min(100, progress * 100))
+  zoomPositionY = clampZoomPosition(progress * 100)
   syncZoomPosition()
 }
 
