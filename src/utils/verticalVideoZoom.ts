@@ -20,6 +20,7 @@ const ZOOMED_CLASS = 'is-bewly-vertical-video-zoomed'
 const ADJUSTING_CLASS = 'is-bewly-vertical-video-adjusting'
 const ACTIVE_CLASS = 'is-bewly-vertical-video-controls-active'
 const BUTTON_CLASS = 'bewly-vertical-video-zoom-button'
+const RATIO_BUTTON_CLASS = 'bewly-vertical-video-ratio-button'
 const CONTROL_CLASS = 'bewly-vertical-video-zoom-control'
 const MAP_CLASS = 'bewly-vertical-video-zoom-map'
 const CANVAS_CLASS = 'bewly-vertical-video-zoom-canvas'
@@ -30,8 +31,15 @@ const MAP_HEIGHT = 160
 const MINIMAP_FRAME_REFRESH_INTERVAL = 30000
 const CONTROLS_AUTO_HIDE_DELAY = 2500
 
+const CROP_RATIOS = [
+  { label: '1:1', value: 1, css: '1 / 1' },
+  { label: '4:3', value: 4 / 3, css: '4 / 3' },
+  { label: '16:9', value: 16 / 9, css: '16 / 9' },
+] as const
+
 let styleEl: HTMLStyleElement | null = null
 let button: HTMLButtonElement | null = null
+let ratioButton: HTMLButtonElement | null = null
 let control: HTMLDivElement | null = null
 let mapElement: HTMLDivElement | null = null
 let canvasElement: HTMLCanvasElement | null = null
@@ -45,6 +53,7 @@ let controlsHideTimer: ReturnType<typeof setTimeout> | null = null
 let hostActivityCleanup: (() => void) | null = null
 let refreshAttempts = 0
 let zoomPositionY = DEFAULT_ZOOM_POSITION_Y
+let cropRatioIndex = 0
 let lastMinimapRenderAt = 0
 
 function injectStyle() {
@@ -57,7 +66,8 @@ function injectStyle() {
       --bewly-vertical-video-controls-top: max(var(--bew-space-12, 48px), calc(var(--bewly-vertical-video-toolbar-bottom, 0px) + var(--bew-space-3, 12px)));
     }
 
-    .${BUTTON_CLASS} {
+    .${BUTTON_CLASS},
+    .${RATIO_BUTTON_CLASS} {
       position: absolute !important;
       top: var(--bewly-vertical-video-controls-top) !important;
       left: auto !important;
@@ -86,6 +96,21 @@ function injectStyle() {
     .${HOST_CLASS}.${VERTICAL_CLASS}.${ACTIVE_CLASS} > .${BUTTON_CLASS},
     .${HOST_CLASS}.${VERTICAL_CLASS}.${ADJUSTING_CLASS} > .${BUTTON_CLASS} {
       display: inline-flex;
+    }
+
+    .${RATIO_BUTTON_CLASS} {
+      width: 56px !important;
+      min-width: 56px !important;
+      padding: 0 !important;
+    }
+
+    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${ACTIVE_CLASS} > .${RATIO_BUTTON_CLASS},
+    .${HOST_CLASS}.${VERTICAL_CLASS}.${ZOOMED_CLASS}.${ADJUSTING_CLASS} > .${RATIO_BUTTON_CLASS} {
+      display: inline-flex;
+    }
+
+    .${HOST_CLASS}.${ZOOMED_CLASS} > .${BUTTON_CLASS} {
+      right: calc(var(--bew-space-3, 12px) + 64px) !important;
     }
 
     .${CONTROL_CLASS} {
@@ -163,7 +188,8 @@ function injectStyle() {
       pointer-events: none !important;
     }
 
-    #bewly-widescreen-root .${HOST_CLASS} > .${BUTTON_CLASS} {
+    #bewly-widescreen-root .${HOST_CLASS} > .${BUTTON_CLASS},
+    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_BUTTON_CLASS} {
       border: 0 !important;
       border-radius: 999px !important;
       box-shadow: 0 6px 18px rgb(0 0 0 / 22%) !important;
@@ -171,7 +197,9 @@ function injectStyle() {
     }
 
     .${BUTTON_CLASS}::before,
-    .${BUTTON_CLASS}::after {
+    .${BUTTON_CLASS}::after,
+    .${RATIO_BUTTON_CLASS}::before,
+    .${RATIO_BUTTON_CLASS}::after {
       display: none !important;
       content: none !important;
     }
@@ -190,7 +218,9 @@ function injectStyle() {
     }
 
     .${BUTTON_CLASS}:hover,
-    #bewly-widescreen-root .${BUTTON_CLASS}:hover {
+    .${RATIO_BUTTON_CLASS}:hover,
+    #bewly-widescreen-root .${BUTTON_CLASS}:hover,
+    #bewly-widescreen-root .${RATIO_BUTTON_CLASS}:hover {
       background: var(--bew-theme-color, #00aeec) !important;
       color: #fff !important;
     }
@@ -213,7 +243,7 @@ function injectStyle() {
       top: 0 !important;
       width: auto !important;
       height: 100% !important;
-      aspect-ratio: 1 / 1 !important;
+      aspect-ratio: var(--bewly-vertical-video-crop-ratio, 1 / 1) !important;
       max-width: none !important;
       max-height: none !important;
       object-fit: cover !important;
@@ -325,6 +355,29 @@ function syncButtonLabel() {
   button.textContent = currentHost.classList.contains(ZOOMED_CLASS) ? t('vertical_video.zoom_out') : t('vertical_video.zoom_in')
 }
 
+function getCurrentCropRatio() {
+  return CROP_RATIOS[cropRatioIndex] ?? CROP_RATIOS[0]
+}
+
+function syncCropRatio() {
+  const ratio = getCurrentCropRatio()
+  currentHost?.style.setProperty('--bewly-vertical-video-crop-ratio', ratio.css)
+
+  if (ratioButton) {
+    ratioButton.textContent = ratio.label
+    ratioButton.title = ratio.label
+    ratioButton.setAttribute('aria-label', ratio.label)
+  }
+
+  syncZoomPosition()
+}
+
+function cycleCropRatio() {
+  cropRatioIndex = (cropRatioIndex + 1) % CROP_RATIOS.length
+  syncCropRatio()
+  scheduleMinimapFrameRender(0, true)
+}
+
 function syncZoomPosition() {
   if (!currentHost)
     return
@@ -369,6 +422,26 @@ function ensureButton(host: HTMLElement) {
 
   if (button.parentElement !== host)
     host.appendChild(button)
+}
+
+function ensureRatioButton(host: HTMLElement) {
+  if (!ratioButton) {
+    ratioButton = document.createElement('button')
+    ratioButton.type = 'button'
+    ratioButton.className = RATIO_BUTTON_CLASS
+    ratioButton.addEventListener('click', () => {
+      if (!currentHost?.classList.contains(VERTICAL_CLASS) || !currentHost.classList.contains(ZOOMED_CLASS))
+        return
+
+      cycleCropRatio()
+      ratioButton?.blur()
+    })
+  }
+
+  if (ratioButton.parentElement !== host)
+    host.appendChild(ratioButton)
+
+  syncCropRatio()
 }
 
 function ensureControl(host: HTMLElement) {
@@ -446,12 +519,13 @@ function getViewportHeight() {
     return 50
 
   const video = getVideoElement()
-  // The zoomed view shows the largest 1:1 (square) crop of the video, so the
-  // visible vertical slice equals the video width — its fraction of the full
-  // frame height is simply videoWidth / videoHeight.
+  // For a crop with target aspect ratio A, the visible source height is
+  // sourceWidth / A. Relative to the full source frame this becomes
+  // (videoWidth / videoHeight) / A.
+  const cropRatio = getCurrentCropRatio().value
   const visibleRatio = video?.videoWidth && video.videoHeight
-    ? video.videoWidth / video.videoHeight
-    : 9 / 16
+    ? (video.videoWidth / video.videoHeight) / cropRatio
+    : (9 / 16) / cropRatio
   const clampedRatio = Math.max(0.1, Math.min(1, visibleRatio))
   return Math.max(24, Math.min(MAP_HEIGHT, Math.round(MAP_HEIGHT * clampedRatio)))
 }
@@ -631,6 +705,7 @@ function refreshVerticalVideoZoom() {
   if (currentHost && currentHost !== host) {
     currentHost.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS)
     currentHost.style.removeProperty('--bewly-vertical-video-zoom-y')
+    currentHost.style.removeProperty('--bewly-vertical-video-crop-ratio')
   }
 
   const hostChanged = currentHost !== host
@@ -639,6 +714,7 @@ function refreshVerticalVideoZoom() {
   if (hostChanged)
     bindHostActivity(currentHost)
   ensureButton(currentHost)
+  ensureRatioButton(currentHost)
   ensureControl(currentHost)
   bindVideoMetadata(video)
   syncVideoState()
@@ -670,12 +746,16 @@ export function resetVerticalVideoZoom() {
   observedVideo = null
   button?.remove()
   button = null
+  ratioButton?.remove()
+  ratioButton = null
   control?.remove()
   control = null
   currentHost?.classList.remove(HOST_CLASS, VERTICAL_CLASS, ZOOMED_CLASS, ADJUSTING_CLASS, ACTIVE_CLASS)
   currentHost?.style.removeProperty('--bewly-vertical-video-zoom-y')
+  currentHost?.style.removeProperty('--bewly-vertical-video-crop-ratio')
   currentHost = null
   zoomPositionY = DEFAULT_ZOOM_POSITION_Y
+  cropRatioIndex = 0
   lastMinimapRenderAt = 0
   mapElement = null
   canvasElement = null
