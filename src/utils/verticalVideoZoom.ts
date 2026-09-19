@@ -239,11 +239,17 @@ function injectStyle() {
     }
 
     #bewly-widescreen-root .${HOST_CLASS} > .${BUTTON_CLASS},
-    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_BUTTON_CLASS},
-    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_MENU_CLASS} {
+    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_BUTTON_CLASS} {
       border: 0 !important;
       border-radius: 999px !important;
       box-shadow: 0 6px 18px rgb(0 0 0 / 22%) !important;
+      filter: none !important;
+    }
+
+    #bewly-widescreen-root .${HOST_CLASS} > .${RATIO_MENU_CLASS} {
+      border: 0 !important;
+      border-radius: 10px !important;
+      box-shadow: 0 8px 24px rgb(0 0 0 / 28%) !important;
       filter: none !important;
     }
 
@@ -369,7 +375,6 @@ function bindHostActivity(host: HTMLElement) {
   resizeObserver.observe(host)
   window.addEventListener('resize', schedulePositionUpdate)
   document.addEventListener('fullscreenchange', schedulePositionUpdate)
-  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   schedulePositionUpdate()
 
   const onPointerActivity = () => {
@@ -383,10 +388,12 @@ function bindHostActivity(host: HTMLElement) {
   const onDocumentPointerDown = (event: PointerEvent) => {
     if (!host.classList.contains(RATIO_MENU_OPEN_CLASS))
       return
-    if (event.composedPath().includes(ratioButton as EventTarget) || event.composedPath().includes(ratioMenu as EventTarget))
+    const path = event.composedPath()
+    if ((ratioButton && path.includes(ratioButton)) || (ratioMenu && path.includes(ratioMenu)))
       return
     setRatioMenuOpen(false)
   }
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   host.addEventListener('pointerenter', onPointerActivity)
   host.addEventListener('pointermove', onPointerActivity)
   host.addEventListener('pointerdown', onPointerActivity)
@@ -422,14 +429,21 @@ function getCurrentCropRatio() {
   return CROP_RATIOS[cropRatioIndex] ?? CROP_RATIOS[0]
 }
 
-function setRatioMenuOpen(open: boolean) {
+function setRatioMenuOpen(open: boolean, focusSelection = false) {
   if (!currentHost || !ratioButton)
     return
 
   currentHost.classList.toggle(RATIO_MENU_OPEN_CLASS, open)
   ratioButton.setAttribute('aria-expanded', String(open))
-  if (open)
+  if (open) {
     showControlsTemporarily(currentHost)
+    if (focusSelection) {
+      requestAnimationFrame(() => {
+        const selected = ratioMenu?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
+        selected?.focus()
+      })
+    }
+  }
 }
 
 function syncRatioOptions() {
@@ -549,7 +563,11 @@ function ensureRatioButton(host: HTMLElement) {
       setRatioMenuOpen(!currentHost.classList.contains(RATIO_MENU_OPEN_CLASS))
     })
     ratioButton.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        setRatioMenuOpen(true, true)
+      }
+      else if (event.key === 'Escape') {
         setRatioMenuOpen(false)
         ratioButton?.focus()
       }
@@ -562,12 +580,28 @@ function ensureRatioButton(host: HTMLElement) {
     ratioMenu.setAttribute('role', 'menu')
     ratioMenu.addEventListener('click', event => event.stopPropagation())
     ratioMenu.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape')
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setRatioMenuOpen(false)
+        ratioButton?.focus()
+        return
+      }
+
+      if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key))
+        return
+
+      const options = Array.from(ratioMenu?.querySelectorAll<HTMLButtonElement>(`.${RATIO_OPTION_CLASS}`) ?? [])
+      if (!options.length)
         return
 
       event.preventDefault()
-      setRatioMenuOpen(false)
-      ratioButton?.focus()
+      const currentIndex = Math.max(0, options.indexOf(document.activeElement as HTMLButtonElement))
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? options.length - 1
+          : (currentIndex + (event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length
+      options[nextIndex]?.focus()
     })
 
     CROP_RATIOS.forEach((ratio, index) => {
