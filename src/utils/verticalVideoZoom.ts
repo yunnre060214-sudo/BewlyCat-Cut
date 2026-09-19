@@ -495,7 +495,7 @@ function syncCropRatio() {
   if (ratioButton) {
     ratioButton.textContent = ratio.label
     ratioButton.title = ratio.label
-    ratioButton.setAttribute('aria-label', `裁切比例 ${ratio.label}`)
+    ratioButton.setAttribute('aria-label', `${t('vertical_video.crop_ratio')}: ${ratio.label}`)
   }
 
   syncRatioOptions()
@@ -578,6 +578,7 @@ function ensureRatioButton(host: HTMLElement) {
     ratioMenu = document.createElement('div')
     ratioMenu.className = RATIO_MENU_CLASS
     ratioMenu.setAttribute('role', 'menu')
+    ratioMenu.setAttribute('aria-label', t('vertical_video.crop_ratio'))
     ratioMenu.addEventListener('click', event => event.stopPropagation())
     ratioMenu.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {

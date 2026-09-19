@@ -1624,6 +1624,7 @@ vertical_video:
   zoom_in: 放大
   zoom_out: 縮小
   adjust_area: 調整直屏影片放大區域
+  crop_ratio: 裁切比例
 favorite_dialog:
   clear_selected: 清走已揀
 inject:

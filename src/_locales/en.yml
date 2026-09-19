@@ -1709,6 +1709,7 @@ vertical_video:
   zoom_in: Zoom in
   zoom_out: Zoom out
   adjust_area: Adjust vertical-video zoom area
+  crop_ratio: Crop ratio
 favorite_dialog:
   clear_selected: Clear selected
 inject:
