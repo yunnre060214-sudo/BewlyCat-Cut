@@ -34,6 +34,7 @@ const MAP_HEIGHT = 160
 const MINIMAP_FRAME_REFRESH_INTERVAL = 30000
 const CONTROLS_AUTO_HIDE_DELAY = 2500
 const CROP_RATIO_STORAGE_KEY = 'bewlyVerticalVideoCropRatio'
+const CROP_POSITION_STORAGE_KEY = 'bewlyVerticalVideoCropPositions'
 
 const CROP_RATIOS = [
   { label: '1:1', value: 1, css: '1 / 1' },
@@ -60,6 +61,9 @@ let hostActivityCleanup: (() => void) | null = null
 let refreshAttempts = 0
 let zoomPositionY = DEFAULT_ZOOM_POSITION_Y
 let cropRatioIndex = 0
+let cropPositions: Record<string, number> = Object.fromEntries(
+  CROP_RATIOS.map(ratio => [ratio.label, DEFAULT_ZOOM_POSITION_Y]),
+)
 let lastMinimapRenderAt = 0
 
 function injectStyle() {
@@ -323,7 +327,7 @@ function showControlsTemporarily(host: HTMLElement) {
 
   controlsHideTimer = setTimeout(() => {
     controlsHideTimer = null
-    if (!host.classList.contains(ADJUSTING_CLASS))
+    if (!host.classList.contains(ADJUSTING_CLASS) && !host.classList.contains(RATIO_MENU_OPEN_CLASS))
       host.classList.remove(ACTIVE_CLASS)
   }, CONTROLS_AUTO_HIDE_DELAY)
 }
@@ -333,7 +337,7 @@ function hideControls(host: HTMLElement) {
     clearTimeout(controlsHideTimer)
     controlsHideTimer = null
   }
-  if (!host.classList.contains(ADJUSTING_CLASS))
+  if (!host.classList.contains(ADJUSTING_CLASS) && !host.classList.contains(RATIO_MENU_OPEN_CLASS))
     host.classList.remove(ACTIVE_CLASS)
 }
 
@@ -456,24 +460,50 @@ function syncRatioOptions() {
   })
 }
 
-function persistCropRatio() {
+function clampZoomPosition(value: number) {
+  return Math.max(0, Math.min(100, value))
+}
+
+function getSavedZoomPosition() {
+  const value = cropPositions[getCurrentCropRatio().label]
+  return Number.isFinite(value) ? clampZoomPosition(value) : DEFAULT_ZOOM_POSITION_Y
+}
+
+function saveCurrentZoomPosition() {
+  cropPositions[getCurrentCropRatio().label] = clampZoomPosition(zoomPositionY)
+}
+
+function persistCropState() {
+  saveCurrentZoomPosition()
   void browser.storage.local.set({
     [CROP_RATIO_STORAGE_KEY]: getCurrentCropRatio().label,
+    [CROP_POSITION_STORAGE_KEY]: cropPositions,
   }).catch(() => {})
 }
 
-async function restoreCropRatio() {
+async function restoreCropState() {
   try {
-    const stored = await browser.storage.local.get(CROP_RATIO_STORAGE_KEY)
+    const stored = await browser.storage.local.get([CROP_RATIO_STORAGE_KEY, CROP_POSITION_STORAGE_KEY])
+    const storedPositions = stored[CROP_POSITION_STORAGE_KEY]
+
+    if (storedPositions && typeof storedPositions === 'object') {
+      for (const ratio of CROP_RATIOS) {
+        const value = Number((storedPositions as Record<string, unknown>)[ratio.label])
+        if (Number.isFinite(value))
+          cropPositions[ratio.label] = clampZoomPosition(value)
+      }
+    }
+
     const label = stored[CROP_RATIO_STORAGE_KEY]
     const index = CROP_RATIOS.findIndex(ratio => ratio.label === label)
-    if (index >= 0) {
+    if (index >= 0)
       cropRatioIndex = index
-      syncCropRatio()
-    }
+
+    zoomPositionY = getSavedZoomPosition()
+    syncCropRatio()
   }
   catch {
-    // Keep the default ratio when extension storage is temporarily unavailable.
+    // Keep the default crop state when extension storage is temporarily unavailable.
   }
 }
 
@@ -481,11 +511,13 @@ function selectCropRatio(index: number, persist = true) {
   if (!CROP_RATIOS[index])
     return
 
+  saveCurrentZoomPosition()
   cropRatioIndex = index
+  zoomPositionY = getSavedZoomPosition()
   syncCropRatio()
   scheduleMinimapFrameRender(0, true)
   if (persist)
-    persistCropRatio()
+    persistCropState()
 }
 
 function syncCropRatio() {
@@ -533,9 +565,11 @@ function ensureButton(host: HTMLElement) {
 
       const zoomed = currentHost.classList.toggle(ZOOMED_CLASS)
       if (!zoomed) {
-        resetZoomPosition()
+        setRatioMenuOpen(false)
+        persistCropState()
       }
       else {
+        zoomPositionY = getSavedZoomPosition()
         scheduleMinimapFrameRender(0, true)
         syncZoomPosition()
       }
@@ -659,6 +693,7 @@ function ensureControl(host: HTMLElement) {
       const onPointerMove = (moveEvent: PointerEvent) => setZoomPositionFromPointer(moveEvent)
       const onPointerUp = () => {
         currentHost?.classList.remove(ADJUSTING_CLASS)
+        persistCropState()
         if (currentHost)
           showControlsTemporarily(currentHost)
         window.removeEventListener('pointermove', onPointerMove)
@@ -674,8 +709,9 @@ function ensureControl(host: HTMLElement) {
         return
 
       event.preventDefault()
-      zoomPositionY = Math.max(0, Math.min(100, zoomPositionY + (event.key === 'ArrowDown' ? 4 : -4)))
+      zoomPositionY = clampZoomPosition(zoomPositionY + (event.key === 'ArrowDown' ? 4 : -4))
       syncZoomPosition()
+      persistCropState()
     })
 
     control.appendChild(mapElement)
@@ -831,7 +867,6 @@ function syncVideoState() {
   if (!vertical) {
     currentHost.classList.remove(ZOOMED_CLASS, RATIO_MENU_OPEN_CLASS)
     ratioButton?.setAttribute('aria-expanded', 'false')
-    resetZoomPosition()
   }
 
   syncButtonLabel()
@@ -845,7 +880,8 @@ function bindVideoMetadata(video: HTMLVideoElement | null) {
   observedVideo = video
   metadataListener = null
   lastMinimapRenderAt = 0
-  resetZoomPosition()
+  zoomPositionY = getSavedZoomPosition()
+  syncZoomPosition()
 
   if (!video)
     return
@@ -913,7 +949,7 @@ function refreshVerticalVideoZoom() {
 export function initVerticalVideoZoom() {
   injectStyle()
   refreshAttempts = 0
-  void restoreCropRatio()
+  void restoreCropState()
   scheduleRefresh(0)
 }
 
@@ -946,6 +982,9 @@ export function resetVerticalVideoZoom() {
   currentHost = null
   zoomPositionY = DEFAULT_ZOOM_POSITION_Y
   cropRatioIndex = 0
+  cropPositions = Object.fromEntries(
+    CROP_RATIOS.map(ratio => [ratio.label, DEFAULT_ZOOM_POSITION_Y]),
+  )
   lastMinimapRenderAt = 0
   mapElement = null
   canvasElement = null
