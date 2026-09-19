@@ -687,17 +687,19 @@ function ensureControl(host: HTMLElement) {
       setZoomPositionFromPointer(event)
 
       const onPointerMove = (moveEvent: PointerEvent) => setZoomPositionFromPointer(moveEvent)
-      const onPointerUp = () => {
+      const finishPointerAdjustment = () => {
         currentHost?.classList.remove(ADJUSTING_CLASS)
         persistCropState()
         if (currentHost)
           showControlsTemporarily(currentHost)
         window.removeEventListener('pointermove', onPointerMove)
-        window.removeEventListener('pointerup', onPointerUp)
+        window.removeEventListener('pointerup', finishPointerAdjustment)
+        window.removeEventListener('pointercancel', finishPointerAdjustment)
       }
 
       window.addEventListener('pointermove', onPointerMove)
-      window.addEventListener('pointerup', onPointerUp, { once: true })
+      window.addEventListener('pointerup', finishPointerAdjustment)
+      window.addEventListener('pointercancel', finishPointerAdjustment)
     })
 
     mapElement.addEventListener('keydown', (event) => {
